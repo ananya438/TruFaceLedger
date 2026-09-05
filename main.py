@@ -5,7 +5,7 @@ Hackathon: Hackathon Goa 2026 (Task #3: Face ID + Blockchain Verification)
 
 Pipeline Flow:
   1. Input Photo -> Detect & Encode Face -> Save Face Crop
-  2. Live Reverse Image Search via SerpApi Google Lens -> 2-Way Biometric Verification
+  2. Live Reverse Image Search via SerpApi Google Lens -> Find Real Matching Social Post
   3. Hash Data (Image + Face Vector + Match URL) -> Write Record to Polygon Amoy Testnet
   4. Fetch On-Chain Data -> Recompute Cryptographic Hash -> Confirm Match (STATUS: VERIFIED)
 
@@ -75,7 +75,7 @@ def run_pipeline(image_path: str):
         print(f"   5. Face Crop Saved:     {face_result['crop_path']}")
 
     # -------------------------------------------------------------------------
-    # STEP 2: Reverse-Image Search with 2-Way Biometric Verification
+    # STEP 2: Reverse-Image Search (SerpApi Google Lens)
     # -------------------------------------------------------------------------
     print("\n[Step 2] Matching social media post (SerpApi Google Lens)...")
     
@@ -85,12 +85,12 @@ def run_pipeline(image_path: str):
         print("Please configure your SerpApi key in .env to enable reverse image searches.")
         sys.exit(1)
 
+    # Search with full original photo
     search_target = image_path
-    face_encoding = face_result.get("face_encoding")
     print(f"   1. Performing live reverse image search with Google Lens...")
     
     try:
-        search_result = reverse_image_search(search_target, input_encoding=face_encoding)
+        search_result = reverse_image_search(search_target)
     except Exception as e:
         print(f"ERROR: Reverse image search failed: {str(e)}")
         sys.exit(1)
@@ -98,18 +98,16 @@ def run_pipeline(image_path: str):
     if not search_result["success"] or not search_result["url"]:
         if face_result.get("crop_path"):
             print("   • Retrying search with cropped face...")
-            search_result = reverse_image_search(face_result["crop_path"], input_encoding=face_encoding)
+            search_result = reverse_image_search(face_result["crop_path"])
 
-    # If visual similarity threshold was not met (Private/Unpublished Photo)
     if not search_result["success"] or not search_result["url"]:
-        print("   2. Match Status:        REJECTED (No Authentic Public Match)")
-        print(f"   3. Visual Similarity:   {search_result.get('similarity_score', 0.0) * 100:.1f}%")
+        print("   2. Match Status:        Not Found")
         print("\n                       STATUS: UNVERIFIED (REJECTED)")
-        print(f" Notice: {search_result.get('error', 'Visual similarity below verification threshold.')}")
-        print(" Reason: Image is private or unpublished. Skipping blockchain write to prevent false records.\n")
+        print(f" Notice: {search_result.get('error', 'No verified public match found.')}")
+        print(" Reason: Image is unpublished or private. Skipping blockchain write to prevent false records.\n")
         sys.exit(0)
 
-    print(f"   2. Match Status:        Found (Confidence: {search_result.get('similarity_score', 1.0) * 100:.1f}%)")
+    print(f"   2. Match Status:        Found")
     print(f"   3. Source Platform:     {search_result['source']}")
     print(f"   4. Matched URL:         {search_result['url']}")
     if search_result.get("title"):
@@ -131,7 +129,6 @@ def run_pipeline(image_path: str):
         "title": search_result.get("title"),
         "source": search_result.get("source"),
         "is_social_media": search_result.get("is_social_media"),
-        "similarity_score": search_result.get("similarity_score"),
         "thumbnail": search_result.get("thumbnail"),
         "search_engine": "SerpApi Google Lens"
     }

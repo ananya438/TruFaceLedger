@@ -1,14 +1,8 @@
 ﻿import os
-import io
 import requests
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from dotenv import load_dotenv
-import cv2
-import numpy as np
-from PIL import Image
-
-from face_module import extract_encoding_from_array, compute_vector_similarity
 
 load_dotenv()
 
@@ -68,27 +62,12 @@ def is_direct_social_post(link: str) -> bool:
         "/comments/" in l or
         "/post/" in l or
         "/posts/" in l or
-        "/pin/" in l or
-        "/watch?v=" in l or
-        "/shorts/" in l
+        "/pin/" in l
     )
-
-
-def download_and_extract_encoding(image_url: str) -> Optional[List[float]]:
-    try:
-        r = requests.get(image_url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
-        if r.status_code == 200:
-            img = Image.open(io.BytesIO(r.content)).convert("RGB")
-            arr = np.array(img)
-            return extract_encoding_from_array(arr)
-    except Exception:
-        pass
-    return None
 
 
 def reverse_image_search(
     image_input: str,
-    input_encoding: Optional[List[float]] = None,
     serpapi_key: Optional[str] = None
 ) -> Dict[str, Any]:
     api_key = serpapi_key or os.getenv("SERPAPI_KEY")
@@ -124,7 +103,6 @@ def reverse_image_search(
             "source": None,
             "thumbnail": None,
             "is_social_media": False,
-            "similarity_score": 0.0,
             "total_matches_found": 0,
             "all_matches": [],
             "public_image_url": public_url,
@@ -162,65 +140,30 @@ def reverse_image_search(
         elif is_social:
             social_matches.append(match_dict)
 
-    candidate_list = direct_social_matches or social_matches or parsed_matches
-    if not candidate_list:
-        return {
-            "success": False,
-            "url": None,
-            "title": None,
-            "source": None,
-            "thumbnail": None,
-            "is_social_media": False,
-            "similarity_score": 0.0,
-            "total_matches_found": 0,
-            "all_matches": [],
-            "public_image_url": public_url,
-            "error": "No verified social matches discovered."
-        }
-
-    best_match = None
-    best_similarity = 0.0
-
-    if input_encoding:
-        for candidate in candidate_list[:10]:
-            thumb_url = candidate.get("thumbnail")
-            if thumb_url:
-                cand_encoding = download_and_extract_encoding(thumb_url)
-                if cand_encoding:
-                    sim = compute_vector_similarity(input_encoding, cand_encoding)
-                    if sim > best_similarity:
-                        best_similarity = sim
-                        best_match = candidate
-                        if sim >= 0.88:
-                            break
-
-    if not best_match:
-        best_match = candidate_list[0]
-
-    SIMILARITY_THRESHOLD = 0.80
-    if input_encoding and best_similarity < SIMILARITY_THRESHOLD:
-        return {
-            "success": False,
-            "url": None,
-            "title": None,
-            "source": None,
-            "thumbnail": None,
-            "is_social_media": False,
-            "similarity_score": best_similarity,
-            "total_matches_found": len(parsed_matches),
-            "all_matches": parsed_matches[:15],
-            "public_image_url": public_url,
-            "error": f"Visual similarity ({best_similarity * 100:.1f}%) is below confidence threshold ({SIMILARITY_THRESHOLD * 100:.0f}%). Image is private or unpublished."
+    if direct_social_matches:
+        # Prioritize X (Twitter) or Instagram post
+        x_or_insta = [m for m in direct_social_matches if "x.com" in m["url"] or "twitter.com" in m["url"] or "instagram.com" in m["url"]]
+        selected_match = x_or_insta[0] if x_or_insta else direct_social_matches[0]
+    elif social_matches:
+        selected_match = social_matches[0]
+    elif parsed_matches:
+        selected_match = parsed_matches[0]
+    else:
+        selected_match = {
+            "url": matches[0].get("link"),
+            "title": matches[0].get("title", "Web Result"),
+            "source": matches[0].get("source", "Web"),
+            "thumbnail": matches[0].get("thumbnail", ""),
+            "is_social_media": False
         }
 
     return {
         "success": True,
-        "url": best_match["url"],
-        "title": best_match["title"],
-        "source": best_match["source"],
-        "thumbnail": best_match["thumbnail"],
-        "is_social_media": best_match.get("is_social_media", False),
-        "similarity_score": best_similarity,
+        "url": selected_match["url"],
+        "title": selected_match["title"],
+        "source": selected_match["source"],
+        "thumbnail": selected_match["thumbnail"],
+        "is_social_media": selected_match.get("is_social_media", False),
         "total_matches_found": len(parsed_matches),
         "all_matches": parsed_matches[:15],
         "public_image_url": public_url,

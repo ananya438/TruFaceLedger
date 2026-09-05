@@ -59,7 +59,7 @@ def extract_encoding_from_array(img_array: np.ndarray) -> Optional[List[float]]:
         
         gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY) if len(img_array.shape) == 3 else img_array
         cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(20, 20))
+        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(25, 25))
         
         if len(faces) > 0:
             x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
@@ -88,20 +88,18 @@ def detect_and_encode_face(image_path: str, crop_output_dir: str = "crops") -> D
         raise ValueError(f"Could not read image: {image_path}")
 
     orig_h, orig_w = cv_img.shape[:2]
-    scale_factor = 1.0
-    proc_img = cv_img
-
-    if orig_w < 600 or orig_h < 600:
-        scale_factor = 3.0
-        proc_img = cv2.resize(cv_img, (int(orig_w * scale_factor), int(orig_h * scale_factor)), interpolation=cv2.INTER_CUBIC)
-
-    gray = cv2.cvtColor(proc_img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
     cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    faces = cascade.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=3, minSize=(20, 20))
+    
+    # Standard robust detection (rejects laptops, plates, furniture, objects)
+    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    scale_factor = 1.0
 
-    if len(faces) == 0:
-        alt_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt2.xml")
-        faces = alt_cascade.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=2, minSize=(15, 15))
+    # Only if no face found and image is a very small low-res thumbnail (< 450px)
+    if len(faces) == 0 and (orig_w < 450 or orig_h < 450):
+        scale_factor = 2.0
+        up_gray = cv2.resize(gray, (int(orig_w * scale_factor), int(orig_h * scale_factor)), interpolation=cv2.INTER_CUBIC)
+        faces = cascade.detectMultiScale(up_gray, scaleFactor=1.08, minNeighbors=4, minSize=(25, 25))
 
     if len(faces) == 0:
         return {
@@ -126,7 +124,7 @@ def detect_and_encode_face(image_path: str, crop_output_dir: str = "crops") -> D
     face_crop_cv = cv_img[max(0, y - pad_y):min(orig_h, y + h + pad_y), max(0, x - pad_x):min(orig_w, x + w + pad_x)]
     cv2.imwrite(crop_path, face_crop_cv)
 
-    face_roi_gray = cv2.resize(gray[y_s:y_s+h_s, x_s:x_s+w_s], (64, 64))
+    face_roi_gray = cv2.resize(gray[y:y+h, x:x+w], (64, 64))
     hist = cv2.calcHist([face_roi_gray], [0], None, [128], [0, 256]).flatten()
     norm = np.linalg.norm(hist)
     normalized_encoding = (hist / (norm if norm > 0 else 1.0)).tolist()
