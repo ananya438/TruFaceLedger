@@ -5,7 +5,7 @@ Hackathon: Hackathon Goa 2026 (Task #3: Face ID + Blockchain Verification)
 
 Pipeline Flow:
   1. Input Photo -> Detect & Encode Face -> Save Face Crop
-  2. Live Reverse Image Search via SerpApi Google Lens -> Find Real Matching Social Post
+  2. Live Reverse Image Search via SerpApi Google Lens -> 2-Way Biometric Verification
   3. Hash Data (Image + Face Vector + Match URL) -> Write Record to Polygon Amoy Testnet
   4. Fetch On-Chain Data -> Recompute Cryptographic Hash -> Confirm Match (STATUS: VERIFIED)
 
@@ -49,10 +49,12 @@ def run_pipeline(image_path: str):
         print("Please provide a valid path to an image file (e.g. python main.py samples/ronaldo.jpg)")
         sys.exit(1)
 
+    print(f"   Input Photo:   {image_path}")
     print(f"   Absolute Path: {os.path.abspath(image_path)}\n")
 
+    # -------------------------------------------------------------------------
     # STEP 1: Detect & Encode Face
-
+    # -------------------------------------------------------------------------
     print("[Step 1] Detecting face and generating cryptographic encodings...")
     try:
         face_result = detect_and_encode_face(image_path, crop_output_dir="crops")
@@ -72,8 +74,10 @@ def run_pipeline(image_path: str):
     if face_result.get("crop_path"):
         print(f"   5. Face Crop Saved:     {face_result['crop_path']}")
 
-    # STEP 2: Reverse-Image Search (SerpApi Google Lens)
-    print("\n[Step 2] Matching (SerpApi Google Lens)...")
+    # -------------------------------------------------------------------------
+    # STEP 2: Reverse-Image Search with 2-Way Biometric Verification
+    # -------------------------------------------------------------------------
+    print("\n[Step 2] Matching social media post (SerpApi Google Lens)...")
     
     serpapi_key = os.getenv("SERPAPI_KEY")
     if not serpapi_key or serpapi_key.startswith("your_"):
@@ -81,36 +85,41 @@ def run_pipeline(image_path: str):
         print("Please configure your SerpApi key in .env to enable reverse image searches.")
         sys.exit(1)
 
-    # Search with full original photo for exact post matching
     search_target = image_path
+    face_encoding = face_result.get("face_encoding")
     print(f"   1. Performing live reverse image search with Google Lens...")
     
     try:
-        search_result = reverse_image_search(search_target)
+        search_result = reverse_image_search(search_target, input_encoding=face_encoding)
     except Exception as e:
         print(f"ERROR: Reverse image search failed: {str(e)}")
         sys.exit(1)
 
     if not search_result["success"] or not search_result["url"]:
-        # Fallback to cropped face if full image had no matches
         if face_result.get("crop_path"):
             print("   • Retrying search with cropped face...")
-            search_result = reverse_image_search(face_result["crop_path"])
+            search_result = reverse_image_search(face_result["crop_path"], input_encoding=face_encoding)
 
+    # If visual similarity threshold was not met (Private/Unpublished Photo)
     if not search_result["success"] or not search_result["url"]:
-        print(f"ERROR: No matching web/social media post found for this image.")
-        sys.exit(1)
+        print("   2. Match Status:        REJECTED (No Authentic Public Match)")
+        print(f"   3. Visual Similarity:   {search_result.get('similarity_score', 0.0) * 100:.1f}%")
+        print("\n                       STATUS: UNVERIFIED (REJECTED)")
+        print(f" Notice: {search_result.get('error', 'Visual similarity below verification threshold.')}")
+        print(" Reason: Image is private or unpublished. Skipping blockchain write to prevent false records.\n")
+        sys.exit(0)
 
-    print(f"   2. Match Status:        Found")
+    print(f"   2. Match Status:        Found (Confidence: {search_result.get('similarity_score', 1.0) * 100:.1f}%)")
     print(f"   3. Source Platform:     {search_result['source']}")
     print(f"   4. Matched URL:         {search_result['url']}")
     if search_result.get("title"):
         print(f"   5. Post Title:          {search_result['title'][:80]}")
     print(f"   6. Similar Matches:     {search_result['total_matches_found']}")
 
+    # -------------------------------------------------------------------------
     # STEP 3: Hashing & Writing to Polygon Amoy Testnet
-    
-    print("\n[Step 3] Hashing  & writing to Polygon Amoy testnet...")
+    # -------------------------------------------------------------------------
+    print("\n[Step 3] Hashing match data & writing to Polygon Amoy testnet...")
     
     rpc_url = os.getenv("ALCHEMY_RPC_URL")
     private_key = os.getenv("PRIVATE_KEY")
@@ -122,6 +131,7 @@ def run_pipeline(image_path: str):
         "title": search_result.get("title"),
         "source": search_result.get("source"),
         "is_social_media": search_result.get("is_social_media"),
+        "similarity_score": search_result.get("similarity_score"),
         "thumbnail": search_result.get("thumbnail"),
         "search_engine": "SerpApi Google Lens"
     }
@@ -144,7 +154,9 @@ def run_pipeline(image_path: str):
     print(f"   5. Gas Used:             {tx_result['gas_used']} units")
     print(f"   6. Explorer Link:        {tx_result['explorer_url']}")
 
+    # -------------------------------------------------------------------------
     # STEP 4: Re-Verifying On-Chain Record
+    # -------------------------------------------------------------------------
     print("\n[Step 4] Re-verifying on-chain record...")
     print("   1. Querying Polygon Amoy node for transaction input data...")
     
