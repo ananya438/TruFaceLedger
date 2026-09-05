@@ -20,6 +20,11 @@ SOCIAL_DOMAINS = [
 ]
 
 
+def get_serpapi_keys() -> List[str]:
+    raw = os.getenv("SERPAPI_KEY", "")
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
 def upload_image_for_search(image_path: str) -> str:
     if not os.path.isfile(image_path):
         raise FileNotFoundError(f"Image not found: {image_path}")
@@ -70,8 +75,8 @@ def reverse_image_search(
     image_input: str,
     serpapi_key: Optional[str] = None
 ) -> Dict[str, Any]:
-    api_key = serpapi_key or os.getenv("SERPAPI_KEY")
-    if not api_key:
+    api_keys = [serpapi_key] if serpapi_key else get_serpapi_keys()
+    if not api_keys:
         raise ValueError("SERPAPI_KEY is not configured in .env file.")
 
     if image_input.startswith("http://") or image_input.startswith("https://"):
@@ -81,19 +86,28 @@ def reverse_image_search(
 
     serpapi_endpoint = "https://serpapi.com/search.json"
     matches = []
+    last_error = "No reverse image matches found on the web."
 
-    try:
-        lens_params = {
-            "engine": "google_lens",
-            "url": public_url,
-            "api_key": api_key,
-            "hl": "en"
-        }
-        resp = requests.get(serpapi_endpoint, params=lens_params, timeout=30)
-        if resp.status_code == 200:
-            matches = resp.json().get("visual_matches", [])
-    except Exception:
-        matches = []
+    for key in api_keys:
+        try:
+            lens_params = {
+                "engine": "google_lens",
+                "url": public_url,
+                "api_key": key,
+                "hl": "en"
+            }
+            resp = requests.get(serpapi_endpoint, params=lens_params, timeout=30)
+            if resp.status_code == 200:
+                data = resp.json()
+                if "error" not in data:
+                    matches = data.get("visual_matches", [])
+                    if matches:
+                        break
+            elif resp.status_code in [401, 429]:
+                continue
+        except Exception as e:
+            last_error = str(e)
+            continue
 
     if not matches:
         return {
@@ -106,7 +120,7 @@ def reverse_image_search(
             "total_matches_found": 0,
             "all_matches": [],
             "public_image_url": public_url,
-            "error": "No reverse image matches found on the web."
+            "error": last_error
         }
 
     direct_social_matches: List[Dict[str, Any]] = []
@@ -141,7 +155,6 @@ def reverse_image_search(
             social_matches.append(match_dict)
 
     if direct_social_matches:
-        # Prioritize X (Twitter) or Instagram post
         x_or_insta = [m for m in direct_social_matches if "x.com" in m["url"] or "twitter.com" in m["url"] or "instagram.com" in m["url"]]
         selected_match = x_or_insta[0] if x_or_insta else direct_social_matches[0]
     elif social_matches:
