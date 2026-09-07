@@ -1,4 +1,4 @@
-﻿import os
+import os
 import requests
 from typing import Dict, Any, Optional, List
 from pathlib import Path
@@ -29,26 +29,60 @@ def upload_image_for_search(image_path: str) -> str:
     if not os.path.isfile(image_path):
         raise FileNotFoundError(f"Image not found: {image_path}")
 
+    # 1. Catbox.moe
     try:
         with open(image_path, "rb") as f:
             resp = requests.post(
                 "https://catbox.moe/user/api.php",
                 data={"reqtype": "fileupload"},
                 files={"fileToUpload": f},
-                timeout=20
+                timeout=15
             )
             if resp.status_code == 200 and resp.text.startswith("http"):
                 return resp.text.strip()
     except Exception:
         pass
 
+    # 2. Uguu.se
+    try:
+        with open(image_path, "rb") as f:
+            resp = requests.post(
+                "https://uguu.se/upload.php",
+                files={"files[]": f},
+                timeout=15
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                files = data.get("files", [])
+                if files and files[0].get("url"):
+                    return files[0]["url"]
+    except Exception:
+        pass
+
+    # 3. Tmpfiles.org
+    try:
+        with open(image_path, "rb") as f:
+            resp = requests.post(
+                "https://tmpfiles.org/api/v1/upload",
+                files={"file": f},
+                timeout=15
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                raw_url = data.get("data", {}).get("url", "")
+                if raw_url:
+                    return raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+    except Exception:
+        pass
+
+    # 4. Litterbox.catbox.moe
     try:
         with open(image_path, "rb") as f:
             resp = requests.post(
                 "https://litterbox.catbox.moe/resources/internals/api.php",
                 data={"reqtype": "fileupload", "time": "1h"},
                 files={"fileToUpload": f},
-                timeout=20
+                timeout=15
             )
             if resp.status_code == 200 and resp.text.startswith("http"):
                 return resp.text.strip()

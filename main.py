@@ -1,4 +1,4 @@
-﻿"""
+"""
 main.py
 truFaceLedger - End-to-End Face ID & Blockchain Verification Pipeline
 Hackathon: Hackathon Goa 2026 (Task #3: Face ID + Blockchain Verification)
@@ -69,14 +69,14 @@ def run_pipeline(image_path: str):
 
     print(f"   1. Face Detected:       {face_result['face_count']} face(s)")
     print(f"   2. Detection Engine:    {face_result['engine']}")
-    print(f"   3. Image SHA-256 Hash:  {face_result['image_hash']}")
-    print(f"   4. Face Encoding Hash:  {face_result['face_encoding_hash']}")
+    if face_result.get("vector_dimension"):
+        print(f"   3. Vector Dimension:    {face_result['vector_dimension']}-d (ArcFace Deep Biometric)")
+    print(f"   4. Image SHA-256 Hash:  {face_result['image_hash']}")
+    print(f"   5. Face Encoding Hash:  {face_result['face_encoding_hash']}")
     if face_result.get("crop_path"):
-        print(f"   5. Face Crop Saved:     {face_result['crop_path']}")
+        print(f"   6. Face Crop Saved:     {face_result['crop_path']}")
 
-    # -------------------------------------------------------------------------
     # STEP 2: Reverse-Image Search (SerpApi Google Lens)
-    # -------------------------------------------------------------------------
     print("\n[Step 2] Matching social media post (SerpApi Google Lens)...")
     
     serpapi_key = os.getenv("SERPAPI_KEY")
@@ -103,8 +103,8 @@ def run_pipeline(image_path: str):
     if not search_result["success"] or not search_result["url"]:
         print("   2. Match Status:        Not Found")
         print("\n                       STATUS: UNVERIFIED (REJECTED)")
-        print(f" Notice: {search_result.get('error', 'No verified public match found.')}")
-        print(" Reason: Image is unpublished or private. Skipping blockchain write to prevent false records.\n")
+        print(" Notice: No matching social media post found for this image.")
+        print(" Reason: Image is not linked to any public social media post. Please provide an image connected to a real social media post (e.g. X, Instagram, Facebook, Reddit) rather than an unpublished or private screenshot.\n")
         sys.exit(0)
 
     print(f"   2. Match Status:        Found")

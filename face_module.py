@@ -1,18 +1,48 @@
-﻿import os
+import os
+import sys
 import hashlib
 import json
+import warnings
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import cv2
 import numpy as np
-from PIL import Image
+
+warnings.filterwarnings("ignore")
 
 try:
-    import face_recognition
-    FACE_RECOGNITION_AVAILABLE = True
+    import insightface
+    INSIGHTFACE_AVAILABLE = True
 except ImportError:
-    face_recognition = None
-    FACE_RECOGNITION_AVAILABLE = False
+    insightface = None
+    INSIGHTFACE_AVAILABLE = False
+
+_INSIGHT_APP = None
+
+
+def get_insightface_app():
+    global _INSIGHT_APP
+    if _INSIGHT_APP is None and INSIGHTFACE_AVAILABLE:
+        try:
+            null_out = open(os.devnull, "w")
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            try:
+                sys.stdout = null_out
+                sys.stderr = null_out
+                app = insightface.app.FaceAnalysis(
+                    name="buffalo_l",
+                    providers=["CPUExecutionProvider"]
+                )
+                app.prepare(ctx_id=0, det_size=(640, 640))
+                _INSIGHT_APP = app
+            finally:
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+                null_out.close()
+        except Exception:
+            _INSIGHT_APP = None
+    return _INSIGHT_APP
 
 
 def calculate_file_sha256(file_path: str) -> str:
@@ -49,24 +79,23 @@ def compute_vector_similarity(vec1: List[float], vec2: List[float]) -> float:
 
 def extract_encoding_from_array(img_array: np.ndarray) -> Optional[List[float]]:
     try:
-        if FACE_RECOGNITION_AVAILABLE and face_recognition is not None:
-            rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB) if len(img_array.shape) == 3 else img_array
-            locations = face_recognition.face_locations(rgb)
-            if locations:
-                encs = face_recognition.face_encodings(rgb, locations)
-                if encs:
-                    return encs[0].tolist()
-        
+        app = get_insightface_app()
+        if app is not None:
+            faces = app.get(img_array)
+            if faces:
+                best_face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+                emb = best_face.embedding
+                norm = np.linalg.norm(emb)
+                return (emb / (norm if norm > 0 else 1.0)).tolist()
+
         gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY) if len(img_array.shape) == 3 else img_array
         cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(25, 25))
-        
         if len(faces) > 0:
             x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
             face_roi = cv2.resize(gray[y:y+h, x:x+w], (64, 64))
         else:
             face_roi = cv2.resize(gray, (64, 64))
-            
         hist = cv2.calcHist([face_roi], [0], None, [128], [0, 256]).flatten()
         norm = np.linalg.norm(hist)
         return (hist / (norm if norm > 0 else 1.0)).tolist()
@@ -88,14 +117,51 @@ def detect_and_encode_face(image_path: str, crop_output_dir: str = "crops") -> D
         raise ValueError(f"Could not read image: {image_path}")
 
     orig_h, orig_w = cv_img.shape[:2]
+    app = get_insightface_app()
+
+    if app is not None:
+        try:
+            faces = app.get(cv_img)
+            if faces and len(faces) > 0:
+                best_face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+                bbox = best_face.bbox.astype(int)
+                x1, y1, x2, y2 = max(0, bbox[0]), max(0, bbox[1]), min(orig_w, bbox[2]), min(orig_h, bbox[3])
+                
+                pad_x = int((x2 - x1) * 0.1)
+                pad_y = int((y2 - y1) * 0.1)
+                crop_x1 = max(0, x1 - pad_x)
+                crop_y1 = max(0, y1 - pad_y)
+                crop_x2 = min(orig_w, x2 + pad_x)
+                crop_y2 = min(orig_h, y2 + pad_y)
+                
+                face_crop_cv = cv_img[crop_y1:crop_y2, crop_x1:crop_x2]
+                cv2.imwrite(crop_path, face_crop_cv)
+
+                emb = best_face.embedding
+                norm = np.linalg.norm(emb)
+                normalized_encoding = (emb / (norm if norm > 0 else 1.0)).tolist()
+
+                return {
+                    "success": True,
+                    "face_count": len(faces),
+                    "image_hash": image_hash,
+                    "face_encoding": normalized_encoding,
+                    "face_encoding_hash": calculate_data_sha256(normalized_encoding),
+                    "bounding_box": {"top": int(y1), "right": int(x2), "bottom": int(y2), "left": int(x1)},
+                    "crop_path": crop_path,
+                    "engine": "insightface_arcface_512d",
+                    "vector_dimension": len(normalized_encoding),
+                    "detection_score": float(best_face.det_score) if hasattr(best_face, "det_score") else 1.0,
+                    "error": None
+                }
+        except Exception:
+            pass
+
     gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
     cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    
-    # Standard robust detection (rejects laptops, plates, furniture, objects)
     faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
     scale_factor = 1.0
 
-    # Only if no face found and image is a very small low-res thumbnail (< 450px)
     if len(faces) == 0 and (orig_w < 450 or orig_h < 450):
         scale_factor = 2.0
         up_gray = cv2.resize(gray, (int(orig_w * scale_factor), int(orig_h * scale_factor)), interpolation=cv2.INTER_CUBIC)
@@ -111,6 +177,8 @@ def detect_and_encode_face(image_path: str, crop_output_dir: str = "crops") -> D
             "bounding_box": None,
             "crop_path": None,
             "engine": "opencv_haar_cascade",
+            "vector_dimension": 0,
+            "detection_score": 0.0,
             "error": "No face detected in the provided image. Please provide a clear portrait photo."
         }
 
@@ -138,5 +206,7 @@ def detect_and_encode_face(image_path: str, crop_output_dir: str = "crops") -> D
         "bounding_box": {"top": int(y), "right": int(x + w), "bottom": int(y + h), "left": int(x)},
         "crop_path": crop_path,
         "engine": "opencv_haar_cascade",
+        "vector_dimension": len(normalized_encoding),
+        "detection_score": 1.0,
         "error": None
     }
