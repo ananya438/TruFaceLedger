@@ -204,10 +204,16 @@ def reverse_image_search(
         elif is_social:
             social_matches.append(match_dict)
 
-    candidates = direct_social_matches + social_matches + parsed_matches
-    selected_match = None
+    if direct_social_matches:
+        x_or_insta = [m for m in direct_social_matches if "x.com" in m["url"] or "twitter.com" in m["url"] or "instagram.com" in m["url"]]
+        candidate_pool = x_or_insta + [m for m in direct_social_matches if m not in x_or_insta] + social_matches + parsed_matches
+    elif social_matches:
+        candidate_pool = social_matches + parsed_matches
+    else:
+        candidate_pool = parsed_matches
 
-    for cand in candidates:
+    selected_match = None
+    for cand in candidate_pool[:3]:
         if target_encoding and cand.get("thumbnail"):
             sim = verify_candidate_biometric(cand["thumbnail"], target_encoding)
             if sim < 0.40:
