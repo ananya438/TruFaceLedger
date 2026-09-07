@@ -29,7 +29,6 @@ def upload_image_for_search(image_path: str) -> str:
     if not os.path.isfile(image_path):
         raise FileNotFoundError(f"Image not found: {image_path}")
 
-    # 1. Catbox.moe
     try:
         with open(image_path, "rb") as f:
             resp = requests.post(
@@ -43,7 +42,6 @@ def upload_image_for_search(image_path: str) -> str:
     except Exception:
         pass
 
-    # 2. Uguu.se
     try:
         with open(image_path, "rb") as f:
             resp = requests.post(
@@ -59,7 +57,6 @@ def upload_image_for_search(image_path: str) -> str:
     except Exception:
         pass
 
-    # 3. Tmpfiles.org
     try:
         with open(image_path, "rb") as f:
             resp = requests.post(
@@ -75,7 +72,6 @@ def upload_image_for_search(image_path: str) -> str:
     except Exception:
         pass
 
-    # 4. Litterbox.catbox.moe
     try:
         with open(image_path, "rb") as f:
             resp = requests.post(
@@ -105,9 +101,29 @@ def is_direct_social_post(link: str) -> bool:
     )
 
 
+def verify_candidate_biometric(thumb_url: str, target_encoding: Optional[List[float]]) -> float:
+    if not thumb_url or not target_encoding:
+        return 0.0
+    try:
+        import cv2
+        import numpy as np
+        from face_module import extract_encoding_from_array, compute_vector_similarity
+        resp = requests.get(thumb_url, timeout=6)
+        if resp.status_code == 200:
+            arr = cv2.imdecode(np.frombuffer(resp.content, np.uint8), cv2.IMREAD_COLOR)
+            if arr is not None:
+                cand_vec = extract_encoding_from_array(arr)
+                if cand_vec:
+                    return compute_vector_similarity(target_encoding, cand_vec)
+    except Exception:
+        pass
+    return 0.0
+
+
 def reverse_image_search(
     image_input: str,
-    serpapi_key: Optional[str] = None
+    serpapi_key: Optional[str] = None,
+    target_encoding: Optional[List[float]] = None
 ) -> Dict[str, Any]:
     api_keys = [serpapi_key] if serpapi_key else get_serpapi_keys()
     if not api_keys:
@@ -188,20 +204,29 @@ def reverse_image_search(
         elif is_social:
             social_matches.append(match_dict)
 
-    if direct_social_matches:
-        x_or_insta = [m for m in direct_social_matches if "x.com" in m["url"] or "twitter.com" in m["url"] or "instagram.com" in m["url"]]
-        selected_match = x_or_insta[0] if x_or_insta else direct_social_matches[0]
-    elif social_matches:
-        selected_match = social_matches[0]
-    elif parsed_matches:
-        selected_match = parsed_matches[0]
-    else:
-        selected_match = {
-            "url": matches[0].get("link"),
-            "title": matches[0].get("title", "Web Result"),
-            "source": matches[0].get("source", "Web"),
-            "thumbnail": matches[0].get("thumbnail", ""),
-            "is_social_media": False
+    candidates = direct_social_matches + social_matches + parsed_matches
+    selected_match = None
+
+    for cand in candidates:
+        if target_encoding and cand.get("thumbnail"):
+            sim = verify_candidate_biometric(cand["thumbnail"], target_encoding)
+            if sim < 0.40:
+                continue
+        selected_match = cand
+        break
+
+    if not selected_match:
+        return {
+            "success": False,
+            "url": None,
+            "title": None,
+            "source": None,
+            "thumbnail": None,
+            "is_social_media": False,
+            "total_matches_found": len(parsed_matches),
+            "all_matches": parsed_matches[:15],
+            "public_image_url": public_url,
+            "error": "No verified social media post found matching this person's face."
         }
 
     return {

@@ -90,7 +90,7 @@ def run_pipeline(image_path: str):
     print(f"   1. Performing live reverse image search with Google Lens...")
     
     try:
-        search_result = reverse_image_search(search_target)
+        search_result = reverse_image_search(search_target, target_encoding=face_result.get("face_encoding"))
     except Exception as e:
         print(f"ERROR: Reverse image search failed: {str(e)}")
         sys.exit(1)
@@ -98,7 +98,7 @@ def run_pipeline(image_path: str):
     if not search_result["success"] or not search_result["url"]:
         if face_result.get("crop_path"):
             print("   • Retrying search with cropped face...")
-            search_result = reverse_image_search(face_result["crop_path"])
+            search_result = reverse_image_search(face_result["crop_path"], target_encoding=face_result.get("face_encoding"))
 
     if not search_result["success"] or not search_result["url"]:
         print("   2. Match Status:        Not Found")
